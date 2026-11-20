@@ -25,7 +25,13 @@ from services.batch_audit_service import (
 
 from services.link_parser import parse_url_list
 from modules.amazon_session import verify_location_in_window
-from services.variation_service import load_variation_matrix, items_for_size
+from services.variation_service import (
+    load_variation_matrix,
+    base_size_options,
+    variations_of_base,
+    items_for_base_size,
+    group_by_size,
+)
 from services.consistency_checker import check_consistency
 from services.history_service import (
     save_run,
@@ -202,7 +208,7 @@ with st.sidebar:
     else:
         st.caption("Your seller name is not set (Delivery Location page).")
 
-    st.caption("Development Version 0.16 · Local Application")
+    st.caption("Development Version 0.17 · Local Application")
 
 
 # =========================================
@@ -637,19 +643,57 @@ elif selected_page == PAGE_VARIATIONS:
                 mime=XLSX_MIME
             )
 
-            sizes = sorted({row["size"] for row in rows if row["size"]})
+            # Sizes are grouped: "King" covers every King pack / piece
+            # variation (Pack of 2, Pack of 4, 3 Piece ...) in every colour.
+            options = base_size_options(rows)
 
-            chosen_size = st.selectbox("Choose one size to audit across all its colours", sizes)
+            labels = {f"{base}  ({count} products)": base for base, count in options}
 
-            size_items = items_for_size(rows, chosen_size)
+            chosen_label = st.selectbox(
+                "Choose a size to audit (all its packs, piece counts and colours)",
+                list(labels.keys()),
+                key="matrix_base_size"
+            )
+
+            chosen_base = labels[chosen_label]
+
+            variations = variations_of_base(rows, chosen_base)
+
+            chosen_variations = st.multiselect(
+                f"Variations of {chosen_base} to include",
+                variations,
+                default=variations,
+                key=f"matrix_variations_{chosen_base}",
+                help="Each pack / piece variation is a separate product with its own "
+                     "details, so each is checked against its own template row."
+            )
+
+            size_items = items_for_base_size(rows, chosen_base, chosen_variations)
+
+            colours = len({item["colour"] for item in size_items})
 
             st.info(
-                f"{len(size_items)} colour(s) will be audited for this size. "
-                "Each one takes roughly 6 to 12 seconds."
+                f"{len(size_items)} product(s) will be audited: "
+                f"{len(chosen_variations)} variation(s) of {chosen_base} in {colours} colour(s)."
+            )
+
+            matrix_spec = choose_spec_for_audit()
+
+            matrix_design = st.checkbox(
+                "Check design and colour: A+ images, videos and the colour name "
+                "match the listing images",
+                value=True,
+                key="matrix_design"
+            )
+
+            matrix_text = st.checkbox(
+                "Read the text inside the images (spelling, size, pieces, pack)",
+                value=True,
+                key="matrix_text"
             )
 
             if st.button(
-                "Audit all colours for this size",
+                f"Audit all {chosen_base} products",
                 width="stretch",
                 disabled=not size_items
             ):
@@ -662,18 +706,22 @@ elif selected_page == PAGE_VARIATIONS:
                         text=f"Auditing {asin} ({index + 1} of {total})..."
                     )
 
-                results = run_batch_audit(size_items, "Full Listing Audit", on_matrix_progress)
+                results = run_batch_audit(
+                    size_items, "Full Listing Audit", on_matrix_progress,
+                    matrix_spec, matrix_design, matrix_text
+                )
 
                 progress_bar.progress(1.0, text="Finished")
 
                 summary_rows = build_summary_rows(results)
 
-                run_id = save_run("Variation Matrix", chosen_size, results, summary_rows)
+                run_id = save_run("Variation Matrix", chosen_base, results, summary_rows)
 
                 st.session_state["variation_results"] = {
-                    "size": chosen_size,
+                    "size": chosen_base,
                     "rows": summary_rows,
                     "results": results,
+                    "items": size_items,
                     "run_id": run_id
                 }
 
@@ -685,30 +733,46 @@ elif selected_page == PAGE_VARIATIONS:
     if variation_results:
 
         st.divider()
-        st.subheader(f"Results for size: {variation_results['size']}")
-        st.caption(f"Saved to history (run {variation_results['run_id']}).")
 
-        st.dataframe(variation_results["rows"], width="stretch")
+        show_batch_results(
+            variation_results["results"],
+            build_batch_workbook(variation_results["rows"], variation_results["results"]),
+            f"variation_{variation_results['size'].replace(' ', '_')}_audit.xlsx",
+            XLSX_MIME,
+            show_audit_result,
+            caption=(
+                f"Size: {variation_results['size']} (all packs, piece counts and colours). "
+                f"Saved to history (run {variation_results['run_id']})."
+            ),
+        )
 
         st.subheader("Cross-colour consistency")
 
-        findings = check_consistency(variation_results["results"])
+        st.caption(
+            "Colours are compared only with the SAME variation (same pack / piece "
+            "count), because a Pack of 2 and a Pack of 4 are meant to differ."
+        )
 
-        if findings:
-            st.dataframe(findings, width="stretch")
+        groups = group_by_size(variation_results["results"], variation_results.get("items") or [])
+
+        all_findings = []
+
+        for size, group in groups.items():
+
+            if len(group) < 2:
+                continue
+
+            for finding in check_consistency(group):
+                all_findings.append({"Variation": size, **finding})
+
+        if all_findings:
+            st.dataframe(all_findings, width="stretch", hide_index=True)
             st.caption(
                 "Potential discrepancies and inconsistencies are for checking, "
                 "not proof of an Amazon policy problem. Colour is not compared."
             )
         else:
-            st.success("No inconsistencies found across these colours.")
-
-        st.download_button(
-            "Download these results as Excel",
-            data=build_batch_workbook(variation_results["rows"], variation_results["results"]),
-            file_name="variation_size_audit.xlsx",
-            mime=XLSX_MIME
-        )
+            st.success("No inconsistencies found between the colours of each variation.")
 
 
 # =========================================

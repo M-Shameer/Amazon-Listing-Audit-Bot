@@ -315,3 +315,106 @@ def items_for_size(rows, size):
         for row in rows
         if row["size"] == size
     ]
+
+# =========================================
+# GROUP VARIATIONS BY BASE SIZE
+# "King (220 x 230 cm) - Pack of 4", "King 3 Piece" and "SKing" style
+# names are grouped under one base size (King, Super King, ...), so one
+# choice audits every pack and piece count of that size in every colour.
+# =========================================
+
+from modules.spec_checker import variant_tokens
+
+
+BASE_SIZE_NAMES = {
+    "smallsingle": "Small Single",
+    "single": "Single",
+    "smalldouble": "Small Double",
+    "double": "Double",
+    "king": "King",
+    "superking": "Super King",
+    "emperor": "Emperor",
+    "queen": "Queen",
+    "twin": "Twin",
+    "cot": "Cot",
+    "cotbed": "Cot Bed",
+    "toddler": "Toddler",
+    "junior": "Junior",
+}
+
+# The order sizes are shown in (smallest first).
+BASE_SIZE_ORDER = list(BASE_SIZE_NAMES.values())
+
+
+def base_size(size_text):
+    """
+    The base size of one variation:
+      "King (220 x 230 cm) - Pack of 4" -> "King"
+      "SKing 4 Piece"                   -> "Super King"
+    A name with no known size word (or with two sizes) stays as it is.
+    """
+
+    sizes = [token for token in variant_tokens(size_text) if ":" not in token]
+
+    if len(sizes) == 1:
+        return BASE_SIZE_NAMES.get(sizes[0], sizes[0].capitalize())
+
+    return str(size_text or "").strip() or "No size"
+
+
+def base_size_options(rows):
+    """
+    [(base size, number of products)] in size order, smallest first.
+    """
+
+    counts = {}
+
+    for row in rows:
+        base = base_size(row.get("size"))
+        counts[base] = counts.get(base, 0) + 1
+
+    def order(name):
+        return (BASE_SIZE_ORDER.index(name), "") if name in BASE_SIZE_ORDER else (len(BASE_SIZE_ORDER), name)
+
+    return sorted(counts.items(), key=lambda item: order(item[0]))
+
+
+def variations_of_base(rows, base):
+    """The exact size names (packs, pieces) that belong to one base size."""
+
+    return sorted({row["size"] for row in rows if row.get("size") and base_size(row["size"]) == base})
+
+
+def items_for_base_size(rows, base, sizes=None):
+    """
+    Batch input for one base size: every pack / piece variation of that
+    size (or only the ones in `sizes`) in every colour. Each item also
+    carries its colour and exact size for grouping the results.
+    """
+
+    chosen = set(sizes) if sizes is not None else None
+
+    return [
+        {
+            "url": "https://www.amazon.co.uk/dp/" + row["asin"],
+            "asin": row["asin"],
+            "colour": row.get("colour", ""),
+            "size": row.get("size", ""),
+        }
+        for row in rows
+        if base_size(row.get("size")) == base
+        and (chosen is None or row.get("size") in chosen)
+    ]
+
+
+def group_by_size(results, items):
+    """{exact size: [results]} so colours are only compared within the same pack/pieces."""
+
+    size_of = {item["asin"]: item.get("size", "") for item in items}
+
+    groups = {}
+
+    for result in results:
+        groups.setdefault(size_of.get(result.get("asin"), ""), []).append(result)
+
+    return groups
