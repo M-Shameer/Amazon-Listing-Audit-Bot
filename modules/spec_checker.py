@@ -143,6 +143,33 @@ def words_of(value):
     return [word for word in text.split() if word not in ("x", "by")]
 
 
+# Words that describe WHICH size, not the measurement itself, so
+# "King (220 x 230 cm)" and "220 x 230 cm" are the same measurement.
+SIZE_LABEL_WORDS = {
+    "single", "double", "king", "super", "sking", "superking", "small", "emperor",
+    "cot", "bed", "toddler", "junior", "queen", "twin", "size", "approx",
+    "approximately", "each", "per",
+}
+
+
+def _close(a, b):
+    return abs(a - b) <= max(0.01, 0.01 * max(abs(a), abs(b)))
+
+
+def all_numbers_found(expected, actual):
+    """True if every expected number appears among the actual numbers (any order)."""
+
+    remaining = list(actual)
+
+    for number in expected:
+        match = next((other for other in remaining if _close(number, other)), None)
+        if match is None:
+            return False
+        remaining.remove(match)
+
+    return True
+
+
 def numbers_equal(first, second):
     """Numbers are equal when they differ by less than 1 percent."""
 
@@ -172,6 +199,11 @@ def compare_value(expected, actual):
 
     exp_words = words_of(expected)
     act_words = words_of(actual)
+
+    if exp_numbers:
+        # For measurements, size names are labels, not part of the value.
+        exp_words = [word for word in exp_words if word not in SIZE_LABEL_WORDS]
+        act_words = [word for word in act_words if word not in SIZE_LABEL_WORDS]
 
     # Compare the words (e.g. "Microfibre" vs "Microfiber").
     if exp_words and set(exp_words) != set(act_words):
@@ -204,6 +236,19 @@ def compare_value(expected, actual):
         and numbers_equal(exp_numbers, act_numbers[:len(exp_numbers)])
     ):
         return RESULT_CHECK, "Amazon shows extra number(s) after your values."
+
+    # The same measurements in another order, maybe with a depth added
+    # ("King (220 x 230 cm)" vs "2.3 x 2.2 x 0.04 metres").
+    if len(act_numbers) > len(exp_numbers) and all_numbers_found(exp_numbers, act_numbers):
+        return RESULT_CHECK, "Same measurements; Amazon shows another order and extra number(s)."
+
+    # "0.53 g" in the template but 530 g on Amazon: a kg / g mix-up.
+    if (
+        exp_dimension == "weight" and act_dimension == "weight"
+        and len(exp_numbers) == 1 and len(act_numbers) == 1
+        and _close(exp_numbers[0] * 1000, act_numbers[0])
+    ):
+        return RESULT_CHECK, "Same if your template means kg: it says grams. Write 'kg' in the template."
 
     return RESULT_MISMATCH, "The numbers are different."
 
@@ -460,6 +505,116 @@ def check_text_column(expected, parts, listing):
     )
 
 
+# ---------------------------------------------------------
+# PARTS OF A SET written in the listing text
+# (fitted sheet in a 3/4-piece duvet set, pillowcases, ...)
+# ---------------------------------------------------------
+
+# Words that say WHAT is measured, not WHICH part.
+_MEASURE_WORDS = {
+    "dimensions", "dimension", "size", "sizes", "width", "length", "depth",
+    "height", "measurements", "measurement", "quantity", "weight",
+}
+
+_MEASURE_IN_TEXT = re.compile(
+    r"\d+(?:[.,]\d+)?(?:\s*(?:" + "|".join(sorted(UNITS, key=len, reverse=True)) + r")\b)?"
+    r"(?:\s*(?:x|×|by|\+)\s*\d+(?:[.,]\d+)?(?:\s*(?:"
+    + "|".join(sorted(UNITS, key=len, reverse=True)) + r")\b)?)*",
+    re.IGNORECASE,
+)
+
+
+def text_anchors(field):
+    """
+    Words to look for in the listing text for a template column, e.g.
+      "Fitted Sheet Pocket Depth" -> ["pocket", "deep"]
+      "Fitted Sheet Dimensions"   -> ["fitted sheet"]
+      "Pillowcase Width"          -> ["pillowcase", "pillow case"]
+    """
+
+    name = normalise_text(field)
+
+    if "pocket" in name:
+        return ["pocket", "deep"]
+
+    words = [word for word in re.findall(r"[a-z]+", name) if word not in _MEASURE_WORDS]
+
+    phrase = " ".join(words)
+
+    anchors = [phrase] if phrase else []
+
+    if "pillowcase" in name or "pillow case" in name:
+        anchors += ["pillowcase", "pillow case"]
+
+    return list(dict.fromkeys(anchor for anchor in anchors if anchor))
+
+
+def find_in_listing_text(field, expected, listing):
+    """
+    For a column Amazon has no field for: look for the measurement in the
+    title / bullets / description near the column's words, e.g. the
+    fitted sheet of a 4-piece duvet set. Returns (result, shows, note) or
+    None when the text gives nothing to compare.
+    """
+
+    exp_numbers, exp_dimension = read_measure(expected)
+
+    if not exp_numbers or not listing:
+        return None
+
+    chunks = []
+
+    for part in ("title", "bullets", "description"):
+        value = (listing or {}).get(part)
+        chunks.append(" ".join(value) if isinstance(value, (list, tuple)) else str(value or ""))
+
+    text = re.sub(r"\s+", " ", " ".join(chunks))
+    lower = text.lower()
+
+    candidates = []
+
+    for anchor in text_anchors(field):
+
+        for match in re.finditer(re.escape(anchor), lower):
+
+            # Mostly AFTER the words ("fitted sheet 150 x 200 cm"), a little
+            # before ("150 x 200 cm fitted sheet").
+            start = max(0, match.start() - 25)
+            window = text[start: match.end() + 120]
+            anchor_at = match.start() - start
+
+            for measure in _MEASURE_IN_TEXT.finditer(window):
+
+                numbers, dimension = read_measure(measure.group(0))
+
+                if dimension in (None, exp_dimension) and numbers and (
+                    dimension or len(numbers) > 1
+                ):
+                    distance = measure.start() - anchor_at
+                    if distance < 0:
+                        distance = 1000 - distance  # before the words: less likely
+                    candidates.append((measure.group(0).strip(), numbers, distance))
+
+    if not candidates:
+        return None
+
+    for written, numbers, _ in candidates:
+        if all_numbers_found(exp_numbers, numbers):
+            return RESULT_MATCH, f"Listing text: '{written}'", "Found in the listing text."
+
+    # Show the nearest measurement of the same kind (same count of numbers).
+    written = sorted(
+        candidates, key=lambda item: (abs(len(item[1]) - len(exp_numbers)), item[2])
+    )[0][0]
+
+    return (
+        RESULT_MISMATCH,
+        f"Listing text: '{written}'",
+        "Amazon has no field for this; the listing text near "
+        f"'{text_anchors(field)[0]}' gives a different measurement.",
+    )
+
+
 def find_amazon_value(technical_details, field):
     """Return (amazon_field_name, value) for a template field, or ("", "")."""
 
@@ -543,6 +698,14 @@ def check_against_spec(technical_details, spec, variant_info=None):
         else:
             amazon_field, actual = find_amazon_value(technical_details, field)
             result, note = compare_value(expected, actual)
+
+            if not amazon_field:
+                # No such field on Amazon (e.g. the fitted sheet of a 4-piece
+                # set): look for it in the title / bullets / description.
+                found = find_in_listing_text(field, expected, variant_info)
+                if found:
+                    result, actual, note = found
+                    parts = ("listing",)
 
         report["counts"][result] += 1
 

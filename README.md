@@ -101,13 +101,22 @@ upload it:
 
 The bot picks the most specific row that matches what the product page shows.
 
+- **Several sheets** — every sheet with *Product Type* and *Size* columns is read (e.g. one
+  for fitted sheets, one for duvet cover sets).
+- **Parts of a set** — columns such as *Fitted Sheet Dimensions* or *Fitted Sheet Pocket
+  Depth* are compared with Amazon's field, or, when Amazon has none, with the measurement
+  written next to "fitted sheet" / "pocket" in the title, bullets or description.
+- **Measurements** — size names in values (`King (220 x 230 cm)`), a different number order or
+  an extra depth on Amazon are handled; a weight written as `0.53G` (grams) is flagged when
+  uploading, because it is almost always meant as kilograms.
+
 ## Tests
 
 ```bash
 python -m unittest discover -s tests -t . -v
 ```
 
-155 unit tests cover the checks, the issue report, history and rechecks, variation matching,
+167 unit tests cover the checks, the issue report, history and rechecks, variation matching,
 OCR checks (with a fake OCR engine) and the browser session logic (with fake pages) — no
 internet needed.
 

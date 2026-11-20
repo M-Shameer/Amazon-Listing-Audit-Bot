@@ -11,6 +11,7 @@ product types (Duvet Cover Set, Fitted Sheet ...) and several sizes.
 """
 
 import json
+import re
 from datetime import datetime
 from io import BytesIO
 
@@ -40,6 +41,8 @@ DEFAULT_FIELDS = [
     "Pillowcase Width",
     "Pillowcase Length",
     "Pillowcase Quantity",
+    "Fitted Sheet Dimensions",
+    "Fitted Sheet Pocket Depth",
     "Closure Type",
     "Product Care Instructions",
     "Brand Name",
@@ -144,6 +147,23 @@ def build_blank_template():
         "    'Listing contains' (title + bullets + description).",
         "  Put the exact words that must appear, e.g. '100% Egyptian Cotton'.",
         "  Several phrases: separate them with ;  e.g. 'Oeko-Tex; 400 Thread Count'.",
+        "",
+        "PARTS OF A SET (fitted sheet in a 3 or 4 piece set, pillowcases ...)",
+        "- Columns such as 'Fitted Sheet Dimensions' (e.g. '150 x 200 cm') and",
+        "  'Fitted Sheet Pocket Depth' (e.g. '35 cm') are compared with Amazon's",
+        "  field of the same name. If Amazon has no such field, the bot reads the",
+        "  title, bullet points and description near the words 'fitted sheet' or",
+        "  'pocket' and compares the measurement written there.",
+        "",
+        "SEVERAL SHEETS",
+        "- Every sheet whose first row has 'Product Type' and 'Size' is read, e.g.",
+        "  one sheet for Fitted Sheets and one for Duvet Cover Sets.",
+        "",
+        "UNITS",
+        "- Always write the unit: '0.53 kg' or '530 g' (NOT '0.53G', which means",
+        "  0.53 grams). 'cm', 'mm', 'm', 'in', 'g', 'kg', 'oz' and 'lb' are understood.",
+        "- Item Dimensions may include the size name: 'King (220 x 230 cm)'.",
+        "  The order of the numbers and an extra depth on Amazon are allowed.",
         "4. Leave a cell EMPTY to skip that check.",
         "5. Column names must match Amazon's 'Product information' labels exactly.",
         "   You may add new columns (e.g. 'Pocket Depth') using Amazon's label.",
@@ -191,49 +211,40 @@ def cell_text(value):
     return " ".join(str(value).split())
 
 
-def parse_template(file_bytes):
+def _weight_warning(product_type, size, field, text):
     """
-    Read a filled template.
-
-    Returns a dictionary:
-      fields:   the field columns found (besides Product Type and Size)
-      rows:     [{"product_type", "size", "values": {field: text}}]
-      warnings: messages to show the user (rows skipped and why)
-      errors:   problems that stop the file being saved
+    A weight written in grams that is far too light for bedding (e.g.
+    "0.53G" = 0.53 grams) is almost certainly meant in kilograms.
     """
 
-    result = {"fields": [], "rows": [], "warnings": [], "errors": []}
+    if "weight" not in field.lower():
+        return ""
 
-    try:
-        workbook = load_workbook(BytesIO(file_bytes), data_only=True, read_only=True)
-    except Exception as error:
-        result["errors"].append("This file could not be opened as Excel: " + str(error))
-        return result
+    match = re.fullmatch(r"\s*(\d+(?:[.,]\d+)?)\s*(g|gm|gms|gram|grams)\s*", text, re.IGNORECASE)
 
-    if SHEET_NAME in workbook.sheetnames:
-        sheet = workbook[SHEET_NAME]
-    else:
-        sheet = workbook[workbook.sheetnames[0]]
-        result["warnings"].append(
-            f"No '{SHEET_NAME}' sheet found; the first sheet "
-            f"'{sheet.title}' was read instead."
+    if match and float(match.group(1).replace(",", ".")) < 10:
+        return (
+            f"{product_type} / {size}: {field} '{text}' means {match.group(1)} GRAMS. "
+            f"If you mean kilograms, write '{match.group(1)} kg'."
         )
+
+    return ""
+
+
+def _read_sheet(sheet, result, rows_by_key, weight_warnings):
+    """Read one sheet that has Product Type and Size columns. Returns True if it had them."""
 
     all_rows = list(sheet.iter_rows(values_only=True))
 
     if not all_rows:
-        result["errors"].append("The sheet is empty.")
-        return result
+        return False
 
     headers = [cell_text(value) for value in all_rows[0]]
 
     lower_headers = [header.lower() for header in headers]
 
     if TYPE_COLUMN.lower() not in lower_headers or SIZE_COLUMN.lower() not in lower_headers:
-        result["errors"].append(
-            f"The first row must contain '{TYPE_COLUMN}' and '{SIZE_COLUMN}' columns."
-        )
-        return result
+        return False
 
     type_index = lower_headers.index(TYPE_COLUMN.lower())
     size_index = lower_headers.index(SIZE_COLUMN.lower())
@@ -244,10 +255,11 @@ def parse_template(file_bytes):
         if header and index not in (type_index, size_index)
     ]
 
-    result["fields"] = [header for _, header in field_indexes]
+    for _, header in field_indexes:
+        if header not in result["fields"]:
+            result["fields"].append(header)
 
-    seen = set()
-    empty_rows = []
+    seen_here = set()
 
     for excel_row, values in enumerate(all_rows[1:], start=2):
 
@@ -266,34 +278,99 @@ def parse_template(file_bytes):
         if not product_type and not size and not has_data:
             continue  # completely empty row
 
+        where = f"Sheet '{sheet.title}', row {excel_row}"
+
         if not product_type or not size:
             if has_data:
                 result["warnings"].append(
-                    f"Row {excel_row} skipped: '{TYPE_COLUMN}' and '{SIZE_COLUMN}' are required."
+                    f"{where} skipped: '{TYPE_COLUMN}' and '{SIZE_COLUMN}' are required."
                 )
             continue
 
         key = (product_type.lower(), size.lower())
 
-        if key in seen:
+        if key in seen_here:
             result["warnings"].append(
-                f"Row {excel_row} skipped: {product_type} / {size} appears twice "
+                f"{where} skipped: {product_type} / {size} appears twice on this sheet "
                 "(the first row was kept)."
             )
             continue
 
-        seen.add(key)
+        seen_here.add(key)
 
-        if not has_data:
-            empty_rows.append(f"{product_type} / {size}")
+        for field, text in field_values.items():
+            warning = _weight_warning(product_type, size, field, text)
+            if warning:
+                weight_warnings.append(warning)
 
-        result["rows"].append({
-            "product_type": product_type,
-            "size": size,
-            "values": field_values
-        })
+        row = {"product_type": product_type, "size": size, "values": field_values}
+
+        existing = rows_by_key.get(key)
+
+        if existing is None:
+            rows_by_key[key] = row
+            result["rows"].append(row)
+
+        elif not any(existing["values"].values()) and has_data:
+            # Empty on an earlier sheet, filled here: use the filled row.
+            existing["values"] = field_values
+
+        elif has_data:
+            result["warnings"].append(
+                f"{where} skipped: {product_type} / {size} is already filled on another sheet."
+            )
+
+    return True
+
+
+def parse_template(file_bytes):
+    """
+    Read a filled template.
+
+    EVERY sheet whose first row has 'Product Type' and 'Size' columns is
+    read (e.g. one sheet for fitted sheets and one for duvet cover sets).
+    Other sheets (lists of links, instructions) are ignored.
+
+    Returns a dictionary:
+      fields:   the field columns found (besides Product Type and Size)
+      rows:     [{"product_type", "size", "values": {field: text}}]
+      warnings: messages to show the user (rows skipped and why)
+      errors:   problems that stop the file being saved
+    """
+
+    result = {"fields": [], "rows": [], "warnings": [], "errors": []}
+
+    try:
+        workbook = load_workbook(BytesIO(file_bytes), data_only=True, read_only=True)
+    except Exception as error:
+        result["errors"].append("This file could not be opened as Excel: " + str(error))
+        return result
+
+    rows_by_key = {}
+    weight_warnings = []
+    used_sheets = []
+
+    for sheet in workbook.worksheets:
+        if _read_sheet(sheet, result, rows_by_key, weight_warnings):
+            used_sheets.append(sheet.title)
 
     workbook.close()
+
+    if not used_sheets:
+        result["errors"].append(
+            f"No sheet has '{TYPE_COLUMN}' and '{SIZE_COLUMN}' in its first row."
+        )
+        return result
+
+    if len(used_sheets) > 1:
+        result["warnings"].append("Sheets read: " + ", ".join(used_sheets) + ".")
+
+    result["warnings"] += weight_warnings
+
+    empty_rows = [
+        f"{row['product_type']} / {row['size']}"
+        for row in result["rows"] if not any(row["values"].values())
+    ]
 
     if empty_rows:
         result["warnings"].append(
