@@ -1,0 +1,15 @@
+[theme]
+base = "light"
+primaryColor = "#068187"
+backgroundColor = "#f6f0e4"
+secondaryBackgroundColor = "#fbf8f1"
+textColor = "#051a2d"
+
+[server]
+# The start file opens the browser itself, so Streamlit never asks
+# questions in the black window.
+headless = true
+port = 8501
+
+[browser]
+gatherUsageStats = false

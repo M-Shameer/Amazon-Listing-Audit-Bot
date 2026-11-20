@@ -1,0 +1,26 @@
+# Virtual environment (rebuilt on each machine, never shared)
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Amazon browser profile: contains session cookies, never share or commit
+data/amazon_uk_profile/
+
+# Your saved personal settings (postcode)
+config/settings.json
+
+# Generated reports and screenshots
+exports/
+logs/
+
+# Secrets (for the OpenAI API key later)
+.env
+# Your audit history, specification sets and case notes (personal data)
+data/*.db
+data/*.db-journal
+
+# Downloaded reports
+*.xlsx
+config/update_source.txt
