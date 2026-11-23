@@ -152,6 +152,22 @@ SIZE_LABEL_WORDS = {
 }
 
 
+# British and American spellings of the same word.
+_UK_US = [
+    (r"fiber$", "fibre"), (r"color$", "colour"), (r"colors$", "colours"),
+    (r"center$", "centre"), (r"gray$", "grey"), (r"meter$", "metre"), (r"meters$", "metres"),
+    (r"liter$", "litre"), (r"liters$", "litres"), (r"ize$", "ise"), (r"ized$", "ised"),
+    (r"yze$", "yse"), (r"fibers$", "fibres"), (r"favorite$", "favourite"),
+]
+
+
+def _uk_spelling(word):
+    for pattern, uk in _UK_US:
+        if re.search(pattern, word):
+            return re.sub(pattern, uk, word)
+    return word
+
+
 def _close(a, b):
     return abs(a - b) <= max(0.01, 0.01 * max(abs(a), abs(b)))
 
@@ -207,6 +223,10 @@ def compare_value(expected, actual):
 
     # Compare the words (e.g. "Microfibre" vs "Microfiber").
     if exp_words and set(exp_words) != set(act_words):
+
+        if {_uk_spelling(w) for w in exp_words} == {_uk_spelling(w) for w in act_words}:
+            if not exp_numbers or numbers_equal(exp_numbers, act_numbers):
+                return RESULT_CHECK, "Same word, UK vs US spelling (e.g. Microfibre / Microfiber)."
 
         if set(exp_words) <= set(act_words) and numbers_equal(exp_numbers, act_numbers):
             return RESULT_CHECK, "Amazon shows extra words."
@@ -345,6 +365,12 @@ def amazon_variant_tokens(technical_details, variant_info=None):
         if number and number != "1":
             tokens.add("pack:" + number)
 
+    # "Number of Packs: 1" is a clear statement that this is NOT a multipack.
+    for field in ("Number of Packs", "Number of Pack", "Pack Quantity", "Package Quantity"):
+        number = _first_number(details.get(field))
+        if number:
+            tokens.add("pack:" + number)
+
     # "Number of Items" can mean pieces or pack, so it may confirm either.
     number = _first_number(details.get("Number of Items"))
     if number:
@@ -371,6 +397,12 @@ def _row_fits(row_tokens, amazon_tokens):
         stated = any(other.startswith(kind + ":") for other in amazon_tokens)
 
         if kind in ("pieces", "pack") and not stated and "items:" + number in amazon_tokens:
+
+            # When "Number of Items" equals "Number of Pieces", it is counting
+            # the pieces of ONE set (duvet + pillowcase = 2), not packs.
+            if kind == "pack" and "pieces:" + number in amazon_tokens:
+                return False
+
             continue
 
         return False
@@ -732,7 +764,8 @@ def check_against_spec(technical_details, spec, variant_info=None):
                 "classification": "Inconsistency with your specification",
                 "reason": (
                     f"Amazon shows '{actual}' but your specification "
-                    f"'{report['set_name']}' says '{expected}'. {note}"
+                    f"'{report['set_name']}' (row '{report['template_size']}') says "
+                    f"'{expected}'. {note}"
                 ).strip()
             })
 

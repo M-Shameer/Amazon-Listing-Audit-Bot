@@ -115,5 +115,42 @@ class FullCheckTests(unittest.TestCase):
         self.assertEqual(report["status"], STATUS_NO_SIZE)
 
 
+class SingleSetIsNotAPackTests(unittest.TestCase):
+    """Live case: a Single set (1 duvet + 1 pillowcase) was matched to Single Pack of 2."""
+
+    ROWS = rows("Single", "Single Pack of 2", "Double", "Double Pack of 2")
+
+    PAGE = {"Size": "Single", "Number of Pieces": "2", "Number of Items": "2",
+            "Number of Packs": "1",
+            "Included Components": "Duvet Cover Set (1 x Duvet Cover + 2 x Pillowcase)"}
+
+    def test_single_set_picks_single_row(self):
+        self.assertEqual(pick(self.ROWS, self.PAGE), "Single")
+
+    def test_items_equal_to_pieces_is_not_a_pack(self):
+        page = dict(self.PAGE)
+        page.pop("Number of Packs")
+        self.assertEqual(pick(self.ROWS, page), "Single")
+
+    def test_real_pack_of_2_still_found(self):
+        page = {"Size": "Single - Pack of 2", "Number of Pieces": "4", "Number of Packs": "2"}
+        self.assertEqual(pick(self.ROWS, page), "Single Pack of 2")
+
+    def test_number_of_packs_2(self):
+        self.assertEqual(pick(self.ROWS, {"Size": "Double", "Number of Packs": "2"}), "Double Pack of 2")
+
+
+class SpellingTests(unittest.TestCase):
+
+    def test_microfibre_is_a_check_not_a_mismatch(self):
+        from modules.spec_checker import compare_value, RESULT_CHECK
+        result, _ = compare_value("100% Premium Microfiber", "100% Premium Microfibre")
+        self.assertEqual(result, RESULT_CHECK)
+
+    def test_different_words_still_mismatch(self):
+        from modules.spec_checker import compare_value, RESULT_MISMATCH
+        self.assertEqual(compare_value("Satin", "Embossed Stripe")[0], RESULT_MISMATCH)
+
+
 if __name__ == "__main__":
     unittest.main()

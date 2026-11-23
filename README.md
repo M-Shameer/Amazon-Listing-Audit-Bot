@@ -119,7 +119,7 @@ The bot picks the most specific row that matches what the product page shows.
 python -m unittest discover -s tests -t . -v
 ```
 
-175 unit tests cover the checks, the issue report, history and rechecks, variation matching,
+181 unit tests cover the checks, the issue report, history and rechecks, variation matching,
 OCR checks (with a fake OCR engine) and the browser session logic (with fake pages) — no
 internet needed.
 

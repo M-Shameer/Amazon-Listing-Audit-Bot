@@ -210,7 +210,7 @@ with st.sidebar:
     else:
         st.caption("Your seller name is not set (Delivery Location page).")
 
-    st.caption("Development Version 0.19 · Local Application")
+    st.caption("Development Version 0.20 · Local Application")
 
 
 # =========================================
