@@ -33,6 +33,8 @@ from services.variation_service import (
     group_by_size,
 )
 from services.consistency_checker import check_consistency
+from services.template_builder import choose_items, build_template_rows, build_template_workbook
+from services.spec_service import parse_template, save_spec_set
 from services.history_service import (
     save_run,
     get_run_list,
@@ -208,7 +210,7 @@ with st.sidebar:
     else:
         st.caption("Your seller name is not set (Delivery Location page).")
 
-    st.caption("Development Version 0.18 · Local Application")
+    st.caption("Development Version 0.19 · Local Application")
 
 
 # =========================================
@@ -642,6 +644,112 @@ elif selected_page == PAGE_VARIATIONS:
                 file_name="variation_matrix.xlsx",
                 mime=XLSX_MIME
             )
+
+            # ---- Build a specification template from this family ----
+
+            with st.expander("📋 Create a specification template from this family"):
+
+                st.caption(
+                    "Reads the Product information of every size variation (a few "
+                    "colours each) and builds one template row per variation, ready "
+                    "to review and upload. When colours disagree, the value most "
+                    "colours show is used and the difference is listed on the Notes sheet."
+                )
+
+                col1, col2, col3 = st.columns([2, 2, 1])
+
+                with col1:
+                    template_type = st.text_input("Product Type", value="Duvet Cover Set",
+                                                  key="builder_type")
+                with col2:
+                    template_name = st.text_input("Template / sheet name", value="ES-DCS",
+                                                  key="builder_name")
+                with col3:
+                    colours_per_size = st.number_input("Colours per size", min_value=1,
+                                                       max_value=6, value=3, key="builder_colours")
+
+                all_sizes = sorted({row["size"] for row in rows if row["size"]})
+
+                builder_sizes = st.multiselect("Size variations", all_sizes, default=all_sizes,
+                                               key="builder_sizes")
+
+                builder_items = choose_items(rows, int(colours_per_size), builder_sizes)
+
+                st.info(f"{len(builder_items)} product page(s) will be read "
+                        f"({len(builder_sizes)} size variation(s)).")
+
+                if st.button("Read the listings and build the template", width="stretch",
+                             disabled=not builder_items, key="builder_run"):
+
+                    builder_bar = st.progress(0.0, text="Starting...")
+
+                    def on_builder_progress(index, total, asin):
+                        builder_bar.progress(index / total,
+                                             text=f"Reading {asin} ({index + 1} of {total})...")
+
+                    builder_results = run_batch_audit(builder_items, "Full Listing Audit",
+                                                      on_builder_progress)
+
+                    builder_bar.progress(1.0, text="Finished")
+
+                    template_rows, template_notes, unread = build_template_rows(
+                        builder_results, builder_items, template_type.strip() or "Duvet Cover Set"
+                    )
+
+                    st.session_state["built_template"] = {
+                        "name": template_name.strip() or "ES-DCS",
+                        "rows": template_rows,
+                        "notes": template_notes,
+                        "unread": unread,
+                        "bytes": build_template_workbook(template_rows, template_notes,
+                                                         template_name.strip() or "ES-DCS"),
+                    }
+
+                built = st.session_state.get("built_template")
+
+                if built:
+
+                    if built["unread"]:
+                        st.warning(
+                            f"{len(built['unread'])} page(s) could not be read (e.g. Amazon was "
+                            "not using your postcode): " + ", ".join(built["unread"])
+                        )
+
+                    if built["rows"]:
+
+                        st.success(f"{len(built['rows'])} template row(s) built.")
+
+                        st.dataframe(
+                            [{"Product Type": row["product_type"], "Size": row["size"], **row["values"]}
+                             for row in built["rows"]],
+                            width="stretch", hide_index=True
+                        )
+
+                        if built["notes"]:
+                            st.caption("Where colours disagreed (also on the Notes sheet):")
+                            st.dataframe(built["notes"], width="stretch", hide_index=True)
+
+                        st.download_button(
+                            f"⬇️ Download {built['name']}.xlsx",
+                            data=built["bytes"],
+                            file_name=f"{built['name']}.xlsx",
+                            mime=XLSX_MIME,
+                            key="builder_download"
+                        )
+
+                        if st.button(f"Save as specification set '{built['name']}'",
+                                     key="builder_save"):
+                            try:
+                                save_spec_set(built["name"], f"{built['name']}.xlsx",
+                                              parse_template(built["bytes"]))
+                                st.success("Saved. Choose it on New Audit or Variation Matrix.")
+                            except ValueError as error:
+                                st.error(str(error))
+
+                        st.caption(
+                            "Check the values before relying on them: the template copies what "
+                            "Amazon shows today, so a mistake already on Amazon would be copied too."
+                        )
 
             # Sizes are grouped: "King" covers every King pack / piece
             # variation (Pack of 2, Pack of 4, 3 Piece ...) in every colour.

@@ -42,6 +42,9 @@ that is wrong, plus an Excel report.
 - **Recheck** — re-audits a saved run and marks each issue *Verified fixed*, *Still present* or *New*.
 - **Correction tracker** — a status for every finding (Not started → Verified fixed), kept across runs.
 - **Support case assistant** — prepares case notes from findings (never submits anything).
+- **Template builder** — builds a specification template (e.g. sheet `ES-DCS`) from a live
+  listing family: one row per size variation from the Product information of several colours;
+  where colours disagree, the majority value is used and the difference is noted.
 - **Variation matrix** — reads every colour × size of a product family; choose a size (e.g. King) to audit all its packs, piece counts and colours, each against its own template row.
 - **Liquid-glass interface** — Apple-inspired glassmorphism with dark and light themes, built on Streamlit.
 
@@ -116,7 +119,7 @@ The bot picks the most specific row that matches what the product page shows.
 python -m unittest discover -s tests -t . -v
 ```
 
-167 unit tests cover the checks, the issue report, history and rechecks, variation matching,
+175 unit tests cover the checks, the issue report, history and rechecks, variation matching,
 OCR checks (with a fake OCR engine) and the browser session logic (with fake pages) — no
 internet needed.
 
