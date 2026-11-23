@@ -41,28 +41,29 @@ function Get-Git {
     return $git
 }
 
+$DefaultRepo = "https://github.com/M-Shameer/Amazon-Listing-Audit-Bot.git"
+
+function Clean-RepoUrl($text) {
+    # Accepts a link pasted with quotes, spaces, "www.", a trailing "/" or a
+    # page inside the repository (e.g. .../tree/main) and returns owner/repo.git.
+    if (-not $text) { return $null }
+    $text = $text.Trim().Trim('"', "'", '<', '>').Trim()
+    $text = $text -replace '^(https?://)?(www\.)?', 'https://'
+    if ($text -match '^https://github\.com/([^/\s]+)/([^/\s]+)') {
+        $repo = $Matches[2] -replace '\.git$', ''
+        return "https://github.com/$($Matches[1])/$repo.git"
+    }
+    return $null
+}
+
 function Get-RepoUrl {
-    # The GitHub repository link, asked once and saved in config\update_source.txt.
+    # The bot's public GitHub repository. Built in, so nothing needs pasting.
+    # A different link can still be saved in config\update_source.txt.
     if (Test-Path $SourceFile) {
-        $url = (Get-Content $SourceFile -Raw).Trim()
-        if ($url) { return $url }
+        $saved = Clean-RepoUrl (Get-Content $SourceFile -Raw)
+        if ($saved) { return $saved }
     }
-
-    Write-Host ""
-    Write-Host "Paste the link of your PRIVATE GitHub repository," -ForegroundColor Cyan
-    Write-Host "for example: https://github.com/M-Shameer/Amazon-Listing-Audit-Bot" -ForegroundColor Cyan
-    $url = (Read-Host "Repository link").Trim()
-
-    if ($url -notmatch '^https://github\.com/[^/]+/[^/]+') {
-        Stop-With "That is not a GitHub repository link."
-    }
-
-    $url = $url.TrimEnd('/')
-    if (-not $url.EndsWith(".git")) { $url = "$url.git" }
-
-    New-Item -ItemType Directory -Force -Path (Split-Path $SourceFile) | Out-Null
-    Set-Content -Path $SourceFile -Value $url -Encoding ASCII
-    return $url
+    return $DefaultRepo
 }
 
 function Use-Repo($git, $url) {

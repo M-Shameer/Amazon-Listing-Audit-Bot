@@ -1,5 +1,5 @@
 # ==============================================================
-# GET THE LATEST VERSION OF THE BOT FROM YOUR PRIVATE GITHUB
+# GET THE LATEST VERSION OF THE BOT FROM GITHUB
 # Do not run directly: double-click "Update Audit Bot.bat".
 #
 # Replaces the bot's CODE with the latest published version.
@@ -23,11 +23,11 @@ Use-Repo $git $url
 
 $before = & $git rev-parse --short HEAD 2>$null
 
-Write-Host "Downloading the latest version (the first time, a GitHub sign-in window opens)..."
+Write-Host "Downloading the latest version from $url ..."
 & $git fetch -q origin main
 
 if ($LASTEXITCODE -ne 0) {
-    Stop-With "Could not download. Check the internet and that you signed in with the right GitHub account."
+    Stop-With "Could not download. Check the internet connection and try again."
 }
 
 & $git reset -q --hard origin/main

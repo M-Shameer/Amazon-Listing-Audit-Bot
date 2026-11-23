@@ -1,5 +1,5 @@
 # ==============================================================
-# PUBLISH THIS VERSION OF THE BOT TO YOUR PRIVATE GITHUB REPOSITORY
+# PUBLISH THIS VERSION OF THE BOT TO YOUR GITHUB REPOSITORY
 # Do not run directly: double-click "Publish Update.bat".
 #
 # Use it on your MAIN laptop after you changed or updated the bot.
