@@ -153,10 +153,12 @@ def issues_for_product(result):
 
     # 6. A+, Brand Story, images displayed; A+ design match
     for finding in result.get("content_findings") or []:
-        severity = "High" if "NOT" in str(finding.get("Status", "")).upper() else "Medium"
+        missing = "NOT" in str(finding.get("Status", "")).upper()
         rows.append(_row(
-            asin, severity, finding.get("Item", "Content"),
-            str(finding.get("Status", "")).capitalize(), "", "",
+            asin, "High" if missing else "Medium", finding.get("Item", "Content"),
+            "Missing" if missing else str(finding.get("Status", "")).capitalize(),
+            "Not shown" if missing else "",
+            ("Shown, like " + finding["Example"]) if finding.get("Example") else "",
             finding.get("Detail", "")
         ))
 
@@ -226,40 +228,97 @@ def build_product_scorecard(results):
 
         buy_box = result.get("buy_box") or {}
 
-        problems_text = [
-            row for row in rows if row["Severity"] in ("High", "Medium", "Low", "Check")
-        ]
+        if verdict == "⚠️ Not checked":
+            problems_text = rows[:1]
+        else:
+            # Only real errors (the Buy Box has its own column).
+            problems_text = [
+                row for row in rows
+                if row["Severity"] in ("High", "Medium", "Low") and row["Area"] != "Featured Offer"
+            ]
 
         problems_text.sort(key=lambda row: SEVERITY_ORDER.get(row["Severity"], 9))
 
         card.append({
             "ASIN": result.get("asin", ""),
             "Result": verdict,
-            "What's Wrong": " • ".join(_short_issue(row) for row in problems_text) or "Nothing found",
+            "Buy Box": buy_box_text(buy_box),
+            "What's Wrong": "\n".join(
+                "• " + _short_issue(row) for row in problems_text
+            ) or "Nothing found",
             "High": counts["High"],
             "Medium": counts["Medium"],
             "Low": counts["Low"],
             "Check": counts["Check"],
             "Advice": counts["Advice"],
-            "Featured Offer": buy_box.get("featured_offer_verdict") or "Not verified",
-            "Seconds": result.get("seconds", ""),
+            "Seconds": result.get("seconds_per_listing") or result.get("seconds", ""),
             "Title": ((result.get("content") or {}).get("title") or "")[:70],
         })
 
     return card
 
 
+# Issue names that add nothing once the values are shown.
+_GENERIC = ("Does not match your specification", "Missing")
+
+
+def _short_value(value, limit=45):
+    value = " ".join(str(value or "").split())
+    return value if len(value) <= limit else value[:limit - 1] + "…"
+
+
 def _short_issue(row):
-    """One issue as short text, e.g. "Title: Special characters not allowed (!)"."""
+    """
+    One issue as short text: what is wrong and what it should be.
+      "Number of Pieces: 2 → should be 4"
+      "A+ content (EBC): Not shown → should be Shown, like B0..."
+      "Title: Special characters not allowed (!)"
+    """
 
-    text = f"{row['Area']}: {row['Issue']}" if row["Area"] not in row["Issue"] else row["Issue"]
+    area = str(row.get("Area") or "")
+    for prefix in ("Product information: ", "Listing text: "):
+        if area.startswith(prefix):
+            area = area[len(prefix):]
 
-    shows = row.get("Amazon Shows") or ""
+    issue = str(row.get("Issue") or "")
+    if issue.startswith("Spelling: "):
+        issue = "Spelling"
 
-    if shows and len(shows) <= 40:
-        text += f" ({shows}" + (f" → {row['Should Be']})" if row.get("Should Be") else ")")
+    shows = _short_value(row.get("Amazon Shows"))
+    should = _short_value(row.get("Should Be"))
+
+    if should.lower() in ("none", "nothing", "(none)"):
+        should = "removed"
+
+    if shows and should and (issue in _GENERIC or issue == "Spelling"):
+        label = area if issue in _GENERIC else f"{area} spelling"
+        return f"{label}: {shows} → should be {should}"
+
+    text = issue if area and area.lower() in issue.lower() else f"{area}: {issue}" if area else issue
+
+    if shows and should:
+        text += f" ({shows} → should be {should})"
+    elif shows:
+        text += f" ({shows})"
 
     return text
+
+
+def buy_box_text(buy_box):
+    """The Buy Box column: does this ASIN have the Buy Box, and who holds it."""
+
+    verdict = (buy_box or {}).get("featured_offer_verdict") or ""
+    seller = (buy_box or {}).get("seller") or ""
+
+    if verdict == "HELD BY YOUR SELLER":
+        return "✅ Yes (yours)"
+    if verdict == "HELD BY ANOTHER SELLER":
+        return "❌ Lost to " + (seller or "another seller")
+    if verdict == "HELD":
+        return "✅ Yes" + (f" ({seller})" if seller else "")
+    if verdict == "NO FEATURED OFFER":
+        return "❌ No Buy Box"
+    return "⚠️ Not verified"
 
 
 def rows_to_tsv(rows, columns=None):
@@ -299,11 +358,17 @@ def batch_totals(results):
 
     seconds = [row["Seconds"] for row in card if isinstance(row["Seconds"], (int, float))]
 
+    per_listing = next((r.get("seconds_per_listing") for r in results if r.get("seconds_per_listing")), None)
+    if per_listing:
+        seconds = [per_listing]
+
     return {
         "products": len(card),
         "fix_now": sum(1 for row in card if row["Result"].startswith("❌")),
         "improve": sum(1 for row in card if row["Result"].startswith("🟠")),
         "clean": sum(1 for row in card if row["Result"].startswith("✅")),
         "issues": sum(row["High"] + row["Medium"] + row["Low"] for row in card),
+        "buy_box_lost": sum(1 for row in card if row["Buy Box"].startswith("❌")),
+        "total_seconds": next((r.get("batch_seconds") for r in results if r.get("batch_seconds")), None),
         "average_seconds": round(sum(seconds) / len(seconds), 1) if seconds else None,
     }

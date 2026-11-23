@@ -5,6 +5,7 @@ No browser or internet needed.
 """
 
 import unittest
+from unittest import mock
 
 from modules import amazon_session
 from services import batch_audit_service
@@ -212,20 +213,27 @@ class FakeBrowser:
 class BatchStopTests(unittest.TestCase):
 
     def setUp(self):
-        self._browser = batch_audit_service.AmazonBrowser
-        self._audit = batch_audit_service.run_product_audit
+        from services import audit_engine
+        self.engine_module = audit_engine
         self.calls = []
 
-        def fake_audit(url, *args, **kwargs):
+        def fake_read(browser, url, *args, **kwargs):
             self.calls.append(url)
-            return {"overall_status": "LOCATION NOT VERIFIED", "errors": ["Use Verify Location."]}
+            return {"overall_status": "LOCATION NOT VERIFIED", "errors": ["Use Verify Location."],
+                    "_done": True}
 
-        batch_audit_service.AmazonBrowser = FakeBrowser
-        batch_audit_service.run_product_audit = fake_audit
+        audit_engine.reset_engine()
+        self.patches = [
+            mock.patch.object(audit_engine, "AmazonBrowser", FakeBrowser),
+            mock.patch.object(audit_engine, "read_product_page", fake_read),
+        ]
+        for patch in self.patches:
+            patch.start()
 
     def tearDown(self):
-        batch_audit_service.AmazonBrowser = self._browser
-        batch_audit_service.run_product_audit = self._audit
+        self.engine_module.reset_engine()
+        for patch in self.patches:
+            patch.stop()
 
     def test_batch_stops_after_location_failure(self):
         items = [{"url": f"https://www.amazon.co.uk/dp/B00000000{n}", "asin": f"B00000000{n}"}

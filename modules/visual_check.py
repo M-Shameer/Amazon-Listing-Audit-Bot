@@ -244,7 +244,7 @@ def compare_videos(video_signatures, listing_signatures):
     return rows, findings
 
 
-def check_visual(page, content, display_report, images):
+def check_visual(page, content, display_report, images, video_urls=None):
     """
     Colour name + video checks for one product.
     images: {url: bytes} already downloaded (listing and A+ images).
@@ -266,7 +266,10 @@ def check_visual(page, content, display_report, images):
 
     colour_report, findings = check_colour(colour_name, image_list)
 
-    video_urls = read_video_thumbnails(page)
+    # video_urls are read on the browser's thread (read_video_thumbnails)
+    # so this check can run in the background without the page.
+    if video_urls is None:
+        video_urls = read_video_thumbnails(page) if page is not None else []
 
     video_rows = []
 

@@ -228,7 +228,7 @@ class ContentFindingTests(unittest.TestCase):
         findings = content_findings(display, {"overall": VERDICT_DIFFERENT})
 
         items = [finding["Item"] for finding in findings]
-        self.assertEqual(items, ["A+ content (EBC)", "A+ design match"])
+        self.assertEqual(items, ["A+ design match"])  # A+ missing is judged per parent
 
     def test_no_findings_when_all_good(self):
         display = {key: {"status": STATUS_DISPLAYED} for key in ("listing_images", "aplus", "brand_story")}

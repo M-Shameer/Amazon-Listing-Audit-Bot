@@ -13,8 +13,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from modules.amazon_session import AmazonBrowser
-from services.audit_service import run_product_audit, finish_image_text
+from services.family_checks import apply_family_checks
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -112,102 +111,40 @@ def parse_url_list(raw_text):
 def run_batch_audit(items, audit_type="Full Listing Audit", progress_callback=None, spec=None,
                     check_design=False, check_text=False):
     """
-    Run the single-product audit for every item, one after another.
+    Audit every item through the shared audit engine (one Chrome for all
+    audits and all browser tabs; see services/audit_engine.py).
 
-    progress_callback(index, total, asin) is called before each product
+    progress_callback(index, total, asin) is called as products finish,
     so the website can show a progress bar.
     One failed product does not stop the batch; its error is recorded.
-    spec: optional specification passed to every product audit.
-    check_design: also compare A+ images with listing images.
-    check_text: also read the text inside the images (OCR). It runs in
-    the background while Chrome loads the next product; the batch only
-    waits at the end for anything still being read.
+    If Amazon is not using the saved postcode, the rest are not checked.
     """
 
-    results = []
+    from services.audit_engine import get_engine
 
     total = len(items)
 
-    def failed(item, message):
-        """A result row for a product that could not be audited."""
-        return {
-            "product_url": item["url"],
-            "overall_status": "FAILED",
-            "errors": [message],
-            "buy_box": {},
-            "content": {},
-            "spelling": {},
-            "spec_check": {},
-            "quality": [],
-            "asin": item["asin"]
-        }
+    batch = get_engine().submit(items, audit_type, spec, check_design, check_text)
 
-    # Chrome is opened ONCE for the whole batch.
-    try:
-        browser = AmazonBrowser()
-        browser.start()
+    def on_progress(read, finished, count):
+        if progress_callback:
+            index = min(finished, count - 1) if count else 0
+            asin = items[index]["asin"] if count else ""
+            progress_callback(finished, total, asin)
 
-    except Exception as error:
+    results = batch.wait(on_progress)
 
-        return [failed(item, "Browser could not start: " + str(error)) for item in items]
+    for item, result in zip(items, results):
+        result["asin"] = result.get("asin") or item["asin"]
 
-    try:
+    apply_family_checks(results)
 
-        for index, item in enumerate(items):
+    # The real time per listing (everything included), for the results page.
+    per_listing = round(batch.elapsed() / total, 1) if total else None
 
-            if progress_callback:
-                progress_callback(index, total, item["asin"])
-
-            # The next product starts loading in a second tab as soon as
-            # this product's page is ready (see AmazonBrowser.prefetch).
-            browser.next_url = items[index + 1]["url"] if index + 1 < total else None
-            browser.upcoming = [item["url"] for item in items[index + 1:index + 3]]
-
-            try:
-
-                result = run_product_audit(
-                    item["url"], audit_type, spec, browser, check_design,
-                    check_text, defer_text=True
-                )
-
-            except Exception as error:
-
-                # Record the failure so the table still shows this product,
-                # then restart Chrome so the next product gets a clean window.
-                result = failed(item, "Unexpected error: " + str(error))
-
-                try:
-                    browser.restart()
-                except Exception as restart_error:
-                    result["errors"].append("Browser restart failed: " + str(restart_error))
-
-            result["asin"] = item["asin"]
-
-            results.append(result)
-
-            # Amazon is not using the saved postcode: every other product
-            # would fail the same way, so stop instead of wasting time.
-            if result.get("overall_status") == "LOCATION NOT VERIFIED":
-
-                message = (result.get("errors") or ["Location not verified."])[0]
-
-                for skipped in items[index + 1:]:
-                    row = failed(skipped, "Not checked. " + message)
-                    row["overall_status"] = "LOCATION NOT VERIFIED"
-                    results.append(row)
-
-                break
-
-    finally:
-
-        browser.close()
-
-    # Collect the text read from the images in the background.
     for result in results:
-        try:
-            finish_image_text(result)
-        except Exception as error:
-            result.setdefault("errors", []).append("Image text failed: " + str(error))
+        result["batch_seconds"] = batch.elapsed()
+        result["seconds_per_listing"] = per_listing
 
     return results
 

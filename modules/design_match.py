@@ -23,6 +23,8 @@ shows the whole brand range, not one design.
 """
 
 import colorsys
+import threading
+from collections import OrderedDict
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -248,6 +250,35 @@ def download_image(page, url):
         return None
 
 
+# Images already downloaded in this session (a parent's listings share
+# their A+ and many images, so each is downloaded only once).
+_CACHE = OrderedDict()
+_CACHE_LOCK = threading.Lock()
+CACHE_MAX_BYTES = 250 * 1024 * 1024
+_cache_bytes = [0]
+
+
+def _cached(url):
+    with _CACHE_LOCK:
+        if url in _CACHE:
+            _CACHE.move_to_end(url)
+            return _CACHE[url]
+    return None
+
+
+def _remember(url, data):
+    if not data:
+        return
+    with _CACHE_LOCK:
+        if url in _CACHE:
+            return
+        _CACHE[url] = data
+        _cache_bytes[0] += len(data)
+        while _cache_bytes[0] > CACHE_MAX_BYTES and _CACHE:
+            _, old = _CACHE.popitem(last=False)
+            _cache_bytes[0] -= len(old)
+
+
 def _fetch_public(url):
     """
     Download one public Amazon image (m.media-amazon.com) without the
@@ -275,14 +306,21 @@ def download_images(page, urls):
     Images that fail in parallel are retried through the browser.
     """
 
-    unique = list(dict.fromkeys(urls))
+    unique = list(dict.fromkeys(url for url in urls if url))
 
-    with ThreadPoolExecutor(max_workers=PARALLEL_DOWNLOADS) as pool:
-        found = dict(zip(unique, pool.map(_fetch_public, unique)))
+    found = {url: _cached(url) for url in unique}
 
-    for url in unique:
-        if found.get(url) is None:
+    missing = [url for url in unique if found[url] is None]
+
+    if missing:
+        with ThreadPoolExecutor(max_workers=PARALLEL_DOWNLOADS) as pool:
+            found.update(zip(missing, pool.map(_fetch_public, missing)))
+
+    for url in missing:
+        # The browser fallback only works on the browser's own thread.
+        if found.get(url) is None and page is not None:
             found[url] = download_image(page, url)
+        _remember(url, found.get(url))
 
     return found
 

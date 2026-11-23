@@ -152,6 +152,75 @@ SIZE_LABEL_WORDS = {
 }
 
 
+# ---------------------------------------------------------
+# SAME MEANING, DIFFERENT WORDING
+# ---------------------------------------------------------
+
+# Phrases written in different ways on Amazon (applied before splitting words).
+_PHRASES = [
+    (r"\bpillow[\s\-]*cases?\b", "pillowcase"),
+    (r"\bpillow[\s\-]*slips?\b", "pillowcase"),
+    (r"\bpillowcases\b", "pillowcase"),
+    (r"\bquilt[\s\-]*covers?\b", "duvet cover"),
+    (r"\bmicro[\s\-]*fib(?:re|er)s?\b", "microfibre"),
+    (r"\bpoly[\s\-]*cotton\b", "polycotton"),
+    (r"\bmachine[\s\-]*wash(?:able)?\b", "machinewash"),
+    (r"\bnon[\s\-]*iron\b", "easycare"),
+    (r"\beasy[\s\-]*(?:care|iron)\b", "easycare"),
+    (r"\bt[\s\-]*c\b", "threadcount"),
+    (r"\bthread[\s\-]*count\b", "threadcount"),
+    (r"\bstripes?\b|\bstriped\b", "stripe"),
+    (r"\bflorals?\b|\bflowers?\b|\bflowery\b", "floral"),
+    (r"&|\+", " and "),
+]
+
+# Words that carry no meaning in a comparison.
+_FILLER = {
+    "and", "with", "of", "the", "a", "an", "for", "in", "on", "to", "includes",
+    "include", "including", "included", "contains", "piece", "pieces", "pc",
+    "pcs", "pce", "each", "approx", "approximately", "only", "is", "are",
+}
+
+# Words with the same meaning.
+_SAME_WORD = {
+    "grey": "grey", "gray": "grey", "multicolour": "multi", "multicoloured": "multi",
+    "colour": "colour", "coloured": "colour", "premium": "premium", "luxury": "premium",
+    "luxurious": "premium", "soft": "soft", "softest": "soft", "silky": "soft",
+}
+
+
+def meaning_words(value, drop_size_labels=False):
+    """
+    The words of a value reduced to their meaning: UK spelling, no plural,
+    common phrases joined ("pillow cases" -> "pillowcase"), filler removed.
+    "1 x Duvet Cover + 2 x Pillowcases" -> {"duvet", "cover", "pillowcase"}.
+    """
+
+    text = normalise_text(value)
+
+    for pattern, replacement in _PHRASES:
+        text = re.sub(pattern, replacement, text)
+
+    words = set()
+
+    for word in words_of(text):
+
+        if drop_size_labels and word in SIZE_LABEL_WORDS:
+            continue
+
+        word = _uk_spelling(word)
+
+        if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+            word = word[:-1]
+
+        word = _SAME_WORD.get(word, word)
+
+        if word and word not in _FILLER:
+            words.add(word)
+
+    return words
+
+
 # British and American spellings of the same word.
 _UK_US = [
     (r"fiber$", "fibre"), (r"color$", "colour"), (r"colors$", "colours"),
@@ -159,6 +228,11 @@ _UK_US = [
     (r"liter$", "litre"), (r"liters$", "litres"), (r"ize$", "ise"), (r"ized$", "ised"),
     (r"yze$", "yse"), (r"fibers$", "fibres"), (r"favorite$", "favourite"),
 ]
+
+
+def _squash_spelling(value):
+    """Letters only, UK spelling: "Microfiber" and "micro-fibre" are equal."""
+    return "".join(_uk_spelling(w) for w in re.findall(r"[a-z0-9%]+", normalise_text(value)))
 
 
 def _uk_spelling(word):
@@ -213,25 +287,40 @@ def compare_value(expected, actual):
     exp_numbers, exp_dimension = read_measure(expected)
     act_numbers, act_dimension = read_measure(actual)
 
-    exp_words = words_of(expected)
-    act_words = words_of(actual)
+    # For measurements, size names are labels, not part of the value.
+    exp_words = meaning_words(expected, drop_size_labels=bool(exp_numbers))
+    act_words = meaning_words(actual, drop_size_labels=bool(exp_numbers))
 
-    if exp_numbers:
-        # For measurements, size names are labels, not part of the value.
-        exp_words = [word for word in exp_words if word not in SIZE_LABEL_WORDS]
-        act_words = [word for word in act_words if word not in SIZE_LABEL_WORDS]
+    same_numbers = (
+        numbers_equal(exp_numbers, act_numbers)
+        or numbers_equal(sorted(exp_numbers), sorted(act_numbers))
+    )
 
-    # Compare the words (e.g. "Microfibre" vs "Microfiber").
-    if exp_words and set(exp_words) != set(act_words):
+    # Compare the MEANING of the words, not the exact wording.
+    if exp_words and exp_words != act_words:
 
-        if {_uk_spelling(w) for w in exp_words} == {_uk_spelling(w) for w in act_words}:
-            if not exp_numbers or numbers_equal(exp_numbers, act_numbers):
-                return RESULT_CHECK, "Same word, UK vs US spelling (e.g. Microfibre / Microfiber)."
+        if not same_numbers and exp_numbers:
+            return RESULT_MISMATCH, "The words and numbers are different."
 
-        if set(exp_words) <= set(act_words) and numbers_equal(exp_numbers, act_numbers):
-            return RESULT_CHECK, "Amazon shows extra words."
+        if exp_words <= act_words:
+            return RESULT_CHECK, "Same meaning; Amazon adds words."
+
+        if act_words and act_words <= exp_words:
+            return RESULT_CHECK, "Same meaning; Amazon leaves out words."
+
+        overlap = len(exp_words & act_words) / len(exp_words | act_words)
+
+        if overlap >= 0.75:
+            return RESULT_CHECK, "Almost the same wording."
 
         return RESULT_MISMATCH, "The words are different."
+
+    if exp_words and not exp_numbers:
+        # Same meaning, only the wording, spelling or order differs.
+        if normalise_text(expected).replace(" ", "") != normalise_text(actual).replace(" ", ""):
+            if _squash_spelling(expected) != _squash_spelling(actual):
+                return RESULT_CHECK, "Same meaning, different wording."
+        return RESULT_MATCH, ""
 
     if not exp_numbers:
         # Words match (only order, spacing or punctuation differ).

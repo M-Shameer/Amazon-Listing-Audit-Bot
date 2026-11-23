@@ -115,8 +115,18 @@ class ResultsLayoutTests(unittest.TestCase):
         )
         card = build_product_scorecard([result])
         self.assertEqual(len(card), 1)
-        self.assertIn("Featured Offer", card[0]["What's Wrong"])
-        self.assertIn("Title: Special characters not allowed", card[0]["What's Wrong"])
+        # The Buy Box has its own column; What's Wrong lists only errors.
+        self.assertEqual(card[0]["Buy Box"], "❌ Lost to " + (result["buy_box"].get("seller") or "another seller"))
+        self.assertNotIn("Featured Offer", card[0]["What's Wrong"])
+        self.assertIn("Title: Special characters not allowed (! → should be removed)", card[0]["What's Wrong"])
+
+    def test_spec_issue_is_short(self):
+        result = make_result("B000000001")
+        result["spec_check"] = {"status": "CHECKED", "issues": [{
+            "location": "Product information: Number of Pieces", "detected_term": "2",
+            "correct_term": "4"}]}
+        card = build_product_scorecard([result])
+        self.assertIn("• Number of Pieces: 2 → should be 4", card[0]["What's Wrong"])
 
     def test_tsv_pastes_into_excel_columns(self):
         text = rows_to_tsv([{"ASIN": "B1", "Issue": "a\tb"}, {"ASIN": "B2", "Issue": "c\nd"}])

@@ -10,6 +10,8 @@ Run from the project folder:
 """
 
 import unittest
+
+from services import audit_engine
 from unittest import mock
 
 import services.audit_service as audit_service
@@ -99,7 +101,9 @@ class AuditFlowTests(unittest.TestCase):
             {"url": f"https://www.amazon.co.uk/dp/B0AAAAAA0{n}", "asin": f"B0AAAAAA0{n}"}
             for n in range(count)
         ]
-        with mock.patch.object(batch_service, "AmazonBrowser", FakeBrowser), \
+        audit_engine.reset_engine()
+        self.addCleanup(audit_engine.reset_engine)
+        with mock.patch.object(audit_engine, "AmazonBrowser", FakeBrowser), \
              mock.patch.object(audit_service, "load_settings",
                                return_value={"expected_seller": "Northwind LTD"}), \
              mock.patch("modules.listing_content.extract_technical_details", return_value={}):

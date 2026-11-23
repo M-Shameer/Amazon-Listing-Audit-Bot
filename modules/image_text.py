@@ -26,8 +26,13 @@ If OCR is not installed, everything still works: the result simply
 says "OCR not installed".
 """
 
+import hashlib
+import os
 import re
+import sqlite3
+import threading
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
@@ -42,7 +47,7 @@ MAX_LISTING_IMAGES = 7
 MAX_APLUS_IMAGES = 8
 
 # Images are shrunk to this longest side before reading (faster, still sharp).
-MAX_SIDE = 1100
+MAX_SIDE = 960
 
 # Lines read with lower confidence than this are ignored.
 MIN_SCORE = 0.6
@@ -87,9 +92,23 @@ def _engine():
 
     try:
         from rapidocr import RapidOCR
-        _ENGINE = RapidOCR()
     except Exception as error:
         _ENGINE_ERROR = str(error) or error.__class__.__name__
+        return None
+
+    # Use only part of the processor, so the laptop and Chrome stay quick.
+    threads = max(1, (os.cpu_count() or 4) // 2)
+
+    try:
+        _ENGINE = RapidOCR(params={
+            "EngineConfig.onnxruntime.intra_op_num_threads": threads,
+            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+        })
+    except Exception:
+        try:
+            _ENGINE = RapidOCR()
+        except Exception as error:
+            _ENGINE_ERROR = str(error) or error.__class__.__name__
 
     return _ENGINE
 
@@ -181,6 +200,60 @@ def choose_images(display_report):
     return chosen
 
 
+# Text already read from an image is kept (in memory and on disk), so an
+# image shared by many listings (A+, the same colour in every size) is
+# read only once - also in later audits.
+CACHE_FILE = Path(__file__).resolve().parent.parent / "data" / "image_text_cache.db"
+_MEMORY = {}
+_CACHE_LOCK = threading.Lock()
+_OCR_LOCK = threading.Lock()
+
+
+def _cache_key(url):
+    # Same picture in another display size has the same key.
+    name = str(url).split("?")[0].rsplit("/", 1)[-1].split(".", 1)[0]
+    return name or hashlib.sha1(str(url).encode()).hexdigest()
+
+
+def _db():
+    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(CACHE_FILE), timeout=10)
+    connection.execute("CREATE TABLE IF NOT EXISTS image_text (key TEXT PRIMARY KEY, text TEXT)")
+    return connection
+
+
+def cached_text(url):
+    key = _cache_key(url)
+    with _CACHE_LOCK:
+        if key in _MEMORY:
+            return _MEMORY[key]
+        try:
+            with _db() as connection:
+                row = connection.execute("SELECT text FROM image_text WHERE key = ?", (key,)).fetchone()
+        except Exception:
+            row = None
+        if row is not None:
+            _MEMORY[key] = row[0]
+            return row[0]
+    return None
+
+
+def remember_text(url, text):
+    key = _cache_key(url)
+    with _CACHE_LOCK:
+        _MEMORY[key] = text
+        try:
+            with _db() as connection:
+                connection.execute("INSERT OR REPLACE INTO image_text VALUES (?, ?)", (key, text))
+        except Exception:
+            pass
+
+
+def read_all_now(chosen, images):
+    """Read the images on THIS thread (cached). Returns (status, rows, seconds)."""
+    return _read_all(chosen, images)
+
+
 def _read_all(chosen, images):
     """Runs in the background thread. Returns (status, rows, seconds)."""
 
@@ -195,19 +268,25 @@ def _read_all(chosen, images):
 
     for kind, number, url in chosen:
 
-        lines = []
+        text = cached_text(url)
 
-        try:
-            lines = read_text(images.get(url))
-        except Exception:
-            lines = []
+        if text is None:
 
-        rows.append({
-            "kind": kind,
-            "number": number,
-            "url": url,
-            "text": " | ".join(text for text, _ in lines),
-        })
+            data = images.get(url)
+
+            try:
+                # One image at a time, even with several audits running.
+                with _OCR_LOCK:
+                    lines = read_text(data)
+            except Exception:
+                lines = []
+
+            text = " | ".join(line for line, _ in lines)
+
+            if data:
+                remember_text(url, text)
+
+        rows.append({"kind": kind, "number": number, "url": url, "text": text})
 
     return STATUS_READ, rows, round(time.perf_counter() - start, 1)
 

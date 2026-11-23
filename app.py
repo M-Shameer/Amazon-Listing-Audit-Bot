@@ -210,7 +210,13 @@ with st.sidebar:
     else:
         st.caption("Your seller name is not set (Delivery Location page).")
 
-    st.caption("Development Version 0.20 · Local Application")
+    try:
+        from services.audit_engine import get_engine
+        st.caption("🤖 Audit engine: " + get_engine().status())
+    except Exception:
+        pass
+
+    st.caption("Development Version 0.21 · Local Application")
 
 
 # =========================================

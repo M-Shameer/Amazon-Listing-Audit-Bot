@@ -36,8 +36,8 @@ SEVERITY_LABELS = {
 PROBLEM_LEVELS = ["High", "Medium", "Low", "Check"]
 
 PRODUCT_COLUMNS = [
-    "ASIN", "Result", "What's Wrong", "High", "Medium", "Low", "Check",
-    "Featured Offer", "Seconds", "Title",
+    "ASIN", "Result", "Buy Box", "What's Wrong", "High", "Medium", "Low", "Check",
+    "Seconds", "Title",
 ]
 
 NOT_CHECKED_MESSAGES = {
@@ -118,7 +118,15 @@ def show_batch_results(results, workbook_bytes, file_name, xlsx_mime, show_detai
         st.metric("✅ No issues", totals["clean"])
     with col5:
         average = totals["average_seconds"]
-        st.metric("Seconds / product", average if average is not None else "-")
+        st.metric("Real seconds / product", average if average is not None else "-",
+                  help="Total time of this audit divided by the number of products "
+                       "(everything included: page, checks, image text).")
+
+    if totals.get("total_seconds"):
+        st.caption(
+            f"⏱️ Whole audit: {totals['total_seconds']} s for {totals['products']} product(s). "
+            f"Buy Box lost or missing: {totals.get('buy_box_lost', 0)}."
+        )
 
     st.download_button(
         "⬇️ Download Excel report",

@@ -254,7 +254,7 @@ def read_content_display(page, location, listing_urls):
                 target = page.locator(selector).first
                 if target.count() > 0:
                     target.scroll_into_view_if_needed(timeout=3000)
-                    page.wait_for_timeout(500)
+                    page.wait_for_timeout(200)
             except Exception:
                 continue
 

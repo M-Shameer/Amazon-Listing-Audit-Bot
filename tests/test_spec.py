@@ -70,11 +70,35 @@ class CompareValueTests(unittest.TestCase):
             RESULT_CHECK
         )
 
-    def test_spelling_difference_is_mismatch(self):
+    def test_same_meaning_is_not_a_mismatch(self):
+        # Spelling and an extra adjective do not change the meaning.
         self.assertEqual(
             compare_value("100% Microfibre", "100% Premium Microfiber")[0],
+            RESULT_CHECK
+        )
+
+    def test_different_material_is_mismatch(self):
+        self.assertEqual(compare_value("100% Cotton", "100% Polyester")[0], RESULT_MISMATCH)
+
+    def test_different_percent_is_mismatch(self):
+        self.assertEqual(compare_value("100% Cotton", "50% Cotton")[0], RESULT_MISMATCH)
+
+    def test_components_worded_differently(self):
+        self.assertIn(
+            compare_value("Duvet Cover Set (1 x Duvet Cover + 2 x Pillowcase)",
+                          "1 Duvet Cover, 2 Pillow Cases")[0],
+            (RESULT_MATCH, RESULT_CHECK)
+        )
+
+    def test_components_with_other_count_is_mismatch(self):
+        self.assertEqual(
+            compare_value("1 x Duvet Cover + 2 x Pillowcase", "1 x Duvet Cover + 1 x Pillowcase")[0],
             RESULT_MISMATCH
         )
+
+    def test_stripe_and_striped(self):
+        self.assertIn(compare_value("Striped", "Stripe")[0], (RESULT_MATCH, RESULT_CHECK))
+        self.assertEqual(compare_value("Floral", "Striped")[0], RESULT_MISMATCH)
 
     def test_extra_words_need_checking(self):
         self.assertEqual(
@@ -146,13 +170,13 @@ class CheckAgainstSpecTests(unittest.TestCase):
         self.assertEqual(results["Pillowcase Width"], RESULT_MATCH)
         self.assertEqual(results["Thread Count"], RESULT_MATCH)
         self.assertEqual(results["Item Dimensions"], RESULT_CHECK)
-        self.assertEqual(results["Fabric Type"], RESULT_MISMATCH)
+        # "100% Microfibre" vs "100% Premium Microfiber": same meaning.
+        self.assertEqual(results["Fabric Type"], RESULT_CHECK)
         self.assertEqual(results["Item Weight"], RESULT_NOT_SHOWN)
         self.assertNotIn("Closure Type", results)
 
         # Only real mismatches become issues.
-        self.assertEqual(len(report["issues"]), 1)
-        self.assertIn("Fabric Type", report["issues"][0]["location"])
+        self.assertEqual(len(report["issues"]), 0)
 
     def test_empty_template_row(self):
         # Real case: values typed on the Single row, audited a Double.

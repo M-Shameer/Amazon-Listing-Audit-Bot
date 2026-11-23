@@ -50,11 +50,16 @@ that is wrong, plus an Excel report.
 
 ## Speed
 
-- One browser for the whole batch; each product page is loaded once and read once.
-- The **next two products load in background tabs** while the current one is checked.
-- Chrome runs **invisibly in the background** — no pop-up windows.
-- Images are downloaded in parallel; OCR runs in a background thread.
-- Every audit shows *where the time went* per step.
+- **One shared audit engine**: a single background Chrome serves every audit from every
+  browser tab. Several parents can be audited at once; their products take turns.
+- Chrome only **reads pages**; downloads, design checks, OCR, spelling and the specification
+  check run in a background pool while Chrome already reads the next product.
+- The **next three products load ahead** in background tabs; adverts and trackers are not loaded.
+- Images and the text read from them are **cached**: listings of one parent share A+ and
+  images, so each is downloaded and read once (OCR results are also kept on disk).
+- OCR uses only half the processor cores and one image at a time, so the laptop stays usable.
+- Chrome runs **invisibly in the background** and stays open between audits.
+- Results show the **real time per product** (whole audit ÷ products) and *where the time went*.
 
 ## How it works
 
@@ -119,7 +124,7 @@ The bot picks the most specific row that matches what the product page shows.
 python -m unittest discover -s tests -t . -v
 ```
 
-181 unit tests cover the checks, the issue report, history and rechecks, variation matching,
+194 unit tests cover the checks, the issue report, history and rechecks, variation matching,
 OCR checks (with a fake OCR engine) and the browser session logic (with fake pages) — no
 internet needed.
 

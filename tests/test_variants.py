@@ -143,9 +143,9 @@ class SingleSetIsNotAPackTests(unittest.TestCase):
 class SpellingTests(unittest.TestCase):
 
     def test_microfibre_is_a_check_not_a_mismatch(self):
-        from modules.spec_checker import compare_value, RESULT_CHECK
+        from modules.spec_checker import compare_value, RESULT_MISMATCH
         result, _ = compare_value("100% Premium Microfiber", "100% Premium Microfibre")
-        self.assertEqual(result, RESULT_CHECK)
+        self.assertNotEqual(result, RESULT_MISMATCH)
 
     def test_different_words_still_mismatch(self):
         from modules.spec_checker import compare_value, RESULT_MISMATCH

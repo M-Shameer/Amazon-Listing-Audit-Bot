@@ -36,10 +36,19 @@ SPEED (version 0.15):
 - Up to PREFETCH_AHEAD products load in background tabs at once.
 - Videos on product pages do not autoplay (less to download).
 
+SPEED (version 0.21):
+- Adverts and tracking hosts are not loaded (faster pages, less CPU).
+- Shorter pauses; more products load ahead.
+- PROFILE_GATE: only one Chrome may use the saved profile at a time.
+  The shared audit engine (services/audit_engine.py) holds it while it
+  works and hands it over between products when another tool (Verify
+  Location, Variation Matrix) needs the profile.
+
 This module does not bypass CAPTCHA or any Amazon security check.
 """
 
 import re
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -59,15 +68,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PAGE_READY_TIMEOUT = 20000
 
 # Short pause after the title appears, so the purchase box can finish.
-SETTLE_MS = 800
+SETTLE_MS = 300
 
 # A page loaded in advance has had time to finish, so a shorter pause.
-SETTLE_PREFETCHED_MS = 250
+SETTLE_PREFETCHED_MS = 100
 
 AMAZON_HOME = "https://www.amazon.co.uk/"
 
 # How many next products load in background tabs at the same time.
-PREFETCH_AHEAD = 2
+PREFETCH_AHEAD = 3
 
 # Amazon's own delivery-location box (the "Deliver to" link at the top).
 LOCATION_LINK = "#nav-global-location-popover-link, #glow-ingress-block"
@@ -77,6 +86,68 @@ POPOVER_CLOSE = (
     "#GLUXConfirmClose, button[name='glowDoneButton'], "
     ".a-popover-footer .a-button-primary input, .a-popover .a-button-close"
 )
+
+# Adverts and tracking: never needed for an audit, so Chrome does not
+# load them (pages finish sooner and use less processor time).
+BLOCKED_HOSTS = [
+    "*.amazon-adsystem.com", "aax-eu.amazon.co.uk", "aax-eu.amazon.com",
+    "fls-eu.amazon.co.uk", "fls-eu.amazon.com", "unagi.amazon.co.uk",
+    "unagi-eu.amazon.com", "*.doubleclick.net", "*.googlesyndication.com",
+]
+
+LAUNCH_ARGS = [
+    "--autoplay-policy=user-gesture-required",
+    "--host-resolver-rules=" + ", ".join(f"MAP {host} ~NOTFOUND" for host in BLOCKED_HOSTS),
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--disable-backgrounding-occluded-windows",
+]
+
+
+class _ProfileGate:
+    """
+    Only ONE Chrome may use the saved Amazon profile at a time.
+    The audit engine holds the gate while its Chrome is open; anything
+    else that needs the profile waits in exclusive(), and the engine
+    closes its Chrome between products to let it through.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._waiting = 0
+        self._count = threading.Lock()
+
+    def wanted(self):
+        return self._waiting > 0
+
+    def take(self, timeout=-1):
+        return self._lock.acquire(timeout=timeout)
+
+    def give(self):
+        try:
+            self._lock.release()
+        except RuntimeError:
+            pass
+
+    @contextmanager
+    def exclusive(self, timeout=600):
+        with self._count:
+            self._waiting += 1
+        try:
+            got = self._lock.acquire(timeout=timeout)
+        finally:
+            with self._count:
+                self._waiting -= 1
+        if not got:
+            raise RuntimeError("The bot's Chrome is busy with another audit. Try again when it finishes.")
+        try:
+            yield
+        finally:
+            self._lock.release()
+
+
+PROFILE_GATE = _ProfileGate()
+
 
 # Visible window: how long to wait for the person to set the postcode.
 LOCATION_WAIT_SECONDS = 180
@@ -222,7 +293,7 @@ def wait_until_ready(page, settle_ms=SETTLE_MS):
     try:
         page.wait_for_selector(
             "#desktop_buybox, #buybox, #outOfStock, #availability",
-            timeout=5000
+            timeout=3000
         )
     except Exception:
         pass
@@ -316,8 +387,8 @@ class AmazonBrowser:
             locale="en-GB",
             timezone_id="Europe/London",
             viewport={"width": 1365, "height": 900},
-            # Product videos do not start by themselves (faster pages).
-            args=["--autoplay-policy=user-gesture-required"]
+            # No video autoplay, no adverts or trackers (faster pages).
+            args=list(LAUNCH_ARGS)
         )
 
         if self.headless:
@@ -513,6 +584,16 @@ class AmazonBrowser:
             if url and url != product_url:
                 self.prefetch(url)
 
+        # Tabs loaded for products that are no longer coming (another
+        # audit finished or stopped) are closed so they don't pile up.
+        wanted = set(upcoming[:PREFETCH_AHEAD])
+        for url in [url for url in self.prefetched if url not in wanted]:
+            tab, _ = self.prefetched.pop(url)
+            try:
+                tab.close()
+            except Exception:
+                pass
+
         return page, report
 
 
@@ -550,7 +631,7 @@ def verify_location_in_window(wait_seconds=LOCATION_WAIT_SECONDS):
     Returns {"verified", "postcode", "amazon_header", "message"}.
     """
 
-    with AmazonBrowser(visible=True) as browser:
+    with PROFILE_GATE.exclusive(), AmazonBrowser(visible=True) as browser:
 
         page = browser.page
 
@@ -595,7 +676,7 @@ def open_verified_amazon_page(product_url):
     Variation Matrix). Yields (page, report).
     """
 
-    with AmazonBrowser() as browser:
+    with PROFILE_GATE.exclusive(), AmazonBrowser() as browser:
 
         page, report = browser.open_product(product_url)
 
